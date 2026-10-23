@@ -94,7 +94,7 @@ verification: bring a government ID and proof of residency to the Decatur, Ebste
 
 # ── Aquatics ─────────────────────────────────────────────────────────────────
 cards = "".join(f"""<div class="card"><h3><a href="{p['href']}">{E(p['name'])}</a></h3><p class="small muted">{E(p['address'])}</p>
-  <p class="st" {live("closures", p['slug'], label="Now")} hidden></p>
+  <p class="st" {live("closures", p["slug"], label="Closed")} hidden></p>
   <p class="small" {live("swims", p['slug'])}>…</p></div>""" for p in POOLS)
 page("index.html", "Aquatics", f"""
     <p class="lede">The City of Decatur has three outdoor pools, Ebster, Glenlake and McKoy, and one indoor pool, Oakhurst, which is open
@@ -202,7 +202,7 @@ LEVELS = [
     ("Swim Team Tune Up", "Stroke and conditioning for swim team swimmers", "Swim Team Tune Up"),
     ("Adults", "Adult lessons", "Adult Swim Lessons"),
 ]
-rows = "".join(f'<tr><th>{E(n)}<div class="small muted" style="font-weight:400">{E(a)}</div></th><td class="when" {live("when", "oakhurst", title=t)}>…</td></tr>'
+rows = "".join(f'<tr><th>{E(n)}<div class="small muted" style="font-weight:400">{E(a)}</div></th><td class="when" {live("when", "oakhurst", title=t, gap=0)}>…</td></tr>'
                for n, a, t in LEVELS)
 page("aquatics-programs.html", "Aquatics Programs", f"""
     <p class="lede">Lessons and therapy at Oakhurst Indoor Pool are run by the city's contractors. Register with them directly.</p>

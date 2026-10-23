@@ -130,14 +130,21 @@
   // Which sessions a pool has on a day, and what that means for a swimmer.
   function dayOf(pool, events, day, kind) {
     const evs = events || [];
+    // "Anything" still means anything a member of the public can join: when a pool has lap or
+    // open swim, a class doesn't count as the pool being open.
+    const pub = (o) => o.kinds.includes("lap") || o.kinds.includes("rec");
+    const publicPool = kind === "any" && evs.some((o) => !o.allDay && pub(o));
+    const fits = (o) => (kind === "any" ? !publicPool || pub(o) : o.kinds.includes(kind));
     const closure = evs.find((o) => o.allDay && o.date <= day && (o.endDate || o.date) >= day && /clos/i.test(o.orig || o.title));
-    const sessions = closure ? [] : evs.filter((o) => !o.allDay && o.date === day && (kind === "any" || o.kinds.includes(kind)));
+    const all = closure ? [] : evs.filter((o) => !o.allDay && o.date === day && (kind === "any" || o.kinds.includes(kind)));
+    const sessions = all;          // the day's list shows everything, classes included
+    const open = all.filter(fits); // the status line counts what the public can join
     const isToday = day === TODAY;
     // When several sessions are on at once, name the one most swimmers come for.
     const rank = (o) => (o.kinds.includes("lap") || o.kinds.includes("rec") ? 0 : o.kinds.includes("fit") ? 1 : 2);
     const byInterest = (a, b) => mins(a.start) - mins(b.start) || rank(a) - rank(b);
-    const live = (isToday ? sessions.filter((o) => mins(o.start) <= NOW && NOW < mins(o.end)) : []).sort((a, b) => rank(a) - rank(b));
-    const later = (isToday ? sessions.filter((o) => mins(o.start) > NOW) : sessions).slice().sort(byInterest);
+    const live = (isToday ? open.filter((o) => mins(o.start) <= NOW && NOW < mins(o.end)) : []).sort((a, b) => rank(a) - rank(b));
+    const later = (isToday ? open.filter((o) => mins(o.start) > NOW) : open).slice().sort(byInterest);
     let state, line;
     if (closure) {
       state = "shut";
@@ -158,7 +165,7 @@
     } else {
       state = "shut";
       const any = evs.some((o) => !o.allDay);
-      const next = evs.find((o) => !o.allDay && o.date > day && (kind === "any" || o.kinds.includes(kind)));
+      const next = evs.find((o) => !o.allDay && o.date > day && fits(o));
       const what = kind === "any" ? "" : ` ${KINDS[kind].label.toLowerCase()}`; // eslint-disable-line
       line = !any ? T("No hours published")
         : isToday && sessions.length ? `${T("Done for today")}${next ? `. ${T("Next")}: ${weekday(next.date)} ${clock(next.start)}` : ""}`
@@ -224,13 +231,15 @@
   const isClosure = (o) => o.allDay && /clos/i.test(o.orig || o.title);
   const closedOn = (evs, d) => evs.some((o) => isClosure(o) && o.date <= d && (o.endDate || o.date) >= d);
   // A day's hours: each stretch with someone in the water, or (whole) first session to last.
+  let MERGE_GAP = 15;
   function hoursOf(list, whole) {
     const iv = list.map((o) => [mins(o.start), mins(o.end)]).sort((a, b) => a[0] - b[0]);
     if (whole) return span(hhmm(iv[0][0]), hhmm(Math.max(...iv.map((x) => x[1]))));
     const out = [];
     // Back-to-back classes with a changeover of 15 minutes or less read as one stretch.
-    for (const [a, b] of iv) { if (out.length && a <= out[out.length - 1][1] + 15) out[out.length - 1][1] = Math.max(out[out.length - 1][1], b); else out.push([a, b]); }
-    return out.map(([a, b]) => span(hhmm(a), hhmm(b))).join(` ${T("and")} `);
+    for (const [a, b] of iv) { if (out.length && a <= out[out.length - 1][1] + MERGE_GAP) out[out.length - 1][1] = Math.max(out[out.length - 1][1], b); else out.push([a, b]); }
+    const parts = out.map(([a, b]) => span(hhmm(a), hhmm(b)));
+    return parts.length > 2 ? `${parts.slice(0, -1).join(", ")} ${T("and")} ${parts[parts.length - 1]}` : parts.join(` ${T("and")} `);
   }
   // A program's regular week: each weekday it runs in at least half its weeks, with that weekday's most common hours.
   // `season` reads the whole scheduled season instead of four weeks: a pool's regular hours
@@ -281,9 +290,12 @@
       .filter((o) => { const k = `${o.orig || o.title}|${o.date}`; if (seen.has(k)) return false; seen.add(k); return true; })
       .map((o) => {
         const last = o.endDate || o.date;
-        const when = o.date <= TODAY
-          ? (/until a reopening date is announced/i.test(o.description || "") ? T("now, no reopening date yet") : `${T("now")} ${T("through")} ${monthDay(last)}`)
-          : last !== o.date ? dateRange(o.date, last) : monthDay(o.date);
+        if (o.date <= TODAY) {
+          // Ongoing: "Closed for the season, no reopening date yet" / "Pool closed for replastering through Nov 29".
+          const open = /until a reopening date is announced/i.test(o.description || "");
+          return `${o.title}${open ? `, ${T("no reopening date yet")}` : ` ${T("through")} ${monthDay(last)}`}`;
+        }
+        const when = last !== o.date ? dateRange(o.date, last) : monthDay(o.date);
         const why = o.title.replace(/^(closed|cerrado)\s*[:–—-]\s*/i, "");
         return /^(closed|cerrado)$/i.test(why.trim()) ? when : `${when} (${why})`;
       });
@@ -298,7 +310,10 @@
       const mode = el.dataset.live;
       if (mode === "when") {
         const want = el.dataset.title.split("|");
+        // data-gap="0": list each class on its own instead of reading back-to-back classes as one stretch.
+        if (el.dataset.gap !== undefined) MERGE_GAP = +el.dataset.gap;
         el.textContent = whenText(evs, (o) => want.includes(o.orig || o.title));
+        MERGE_GAP = 15;
       } else if (mode === "hours") {
         const w = weekly(evs, (o) => inProgram(o) && !/^closes early/i.test(o.orig || o.title), true, true);
         const hours = (w ? w.hours : Array(7).fill("")).map((h) => h || T("Closed"));
@@ -323,7 +338,8 @@
         // Days whose hours differ from that weekday's regular hours, through the last scheduled day.
         const w = weekly(evs, inProgram, true, true);
         const open = evs.filter((o) => !o.allDay && inProgram(o));
-        const lastDay = open.reduce((m, o) => (o.date > m ? o.date : m), TODAY);
+        const lastDay = [...open.map((o) => o.date), ...evs.filter(isClosure).map((o) => o.endDate || o.date)]
+          .filter((d) => d <= addDays(TODAY, 90)).reduce((m, d) => (d > m ? d : m), TODAY);
         const rows = [];
         for (let d = TODAY; d <= lastDay && rows.length < 12; d = addDays(d, 1)) {
           const closure = evs.find((o) => isClosure(o) && o.date <= d && (o.endDate || o.date) >= d);
@@ -346,7 +362,9 @@
       } else if (mode === "closures") {
         const list = closureList(evs);
         el.hidden = !list.length;
-        el.innerHTML = `<b>${esc(T(el.dataset.label || "Closed"))}:</b> ${esc(list.join("; "))}.`;
+        // A list that already starts with the label's word ("Closed for the season…") needs no label.
+        const label = T(el.dataset.label || "Closed");
+        el.innerHTML = list[0].toLowerCase().startsWith(label.toLowerCase()) ? `${esc(list.join("; "))}.` : `<b>${esc(label)}:</b> ${esc(list.join("; "))}.`;
       }
     }).catch(() => { el.textContent = T("See the calendar for times."); });
   });
@@ -438,7 +456,7 @@
     </div>
     <div class="summary" aria-live="polite"><span class="muted">Loading every pool's schedule…</span></div>
     <div class="split"><ol class="results"></ol><div id="map" role="region" aria-label="Map of pools"></div></div>
-    <div class="legend"><span class="k-lap">Lap swim</span><span class="k-rec">Rec &amp; family swim</span><span class="k-fit">Water fitness</span><span class="k-learn">Lessons &amp; teams</span><span class="k-other">Other</span></div>`;
+    <div class="legend"><span class="k-lap">Lap swim</span><span class="k-rec">Open swim</span><span class="k-fit">Water fitness</span><span class="k-learn">Lessons &amp; teams</span><span class="k-other">Other</span></div>`;
   const list = root.querySelector(".results");
   const summary = root.querySelector(".summary");
 
